@@ -1185,6 +1185,11 @@ namespace SIPSorcery.Net
                 {
                     return;
                 }
+                else if (buffer.Length == 0)
+                {
+                    var audioRtpChannel = GetRtpChannel(SDPMediaTypesEnum.audio);
+                    SendRtpPacket(audioRtpChannel, AudioDestinationEndPoint, new byte[0], audioTrack.Timestamp, 0, payloadTypeID, audioTrack.Ssrc, audioTrack.SeqNum++, AudioRtcpSession);
+                }
                 else
                 {
                     for (int index = 0; index * RTP_MAX_PAYLOAD < buffer.Length; index++)
@@ -1216,6 +1221,65 @@ namespace SIPSorcery.Net
                 logger.LogError("SocketException SendAudioFrame. " + sockExcp.Message);
             }
         }
+
+        /// <summary>
+        /// Sends an audio packet to the remote party with the Marker bit set.
+        /// </summary>
+        /// <param name="duration">The duration of the audio payload in timestamp units. This value
+        /// gets added onto the timestamp being set in the RTP header.</param>
+        /// <param name="payloadTypeID">The payload ID to set in the RTP header.</param>
+        /// <param name="buffer">The audio payload to send.</param>
+        public void SendAudioFrameWithMarker(uint duration, int payloadTypeID, byte[] buffer)
+        {
+            if (m_isClosed || m_rtpEventInProgress || AudioDestinationEndPoint == null)
+            {
+                return;
+            }
+
+            try
+            {
+                var audioTrack = AudioLocalTrack;
+
+                if (audioTrack == null)
+                {
+                    logger.LogWarning("SendAudio was called on an RTP session without an audio stream.");
+                }
+                else if (audioTrack.StreamStatus == MediaStreamStatusEnum.Inactive || audioTrack.StreamStatus == MediaStreamStatusEnum.RecvOnly)
+                {
+                    return;
+                }
+                else
+                {
+                    for (int index = 0; index * RTP_MAX_PAYLOAD < buffer.Length; index++)
+                    {
+                        audioTrack.SeqNum = (ushort)(audioTrack.SeqNum % UInt16.MaxValue);
+
+                        int offset = (index == 0) ? 0 : (index * RTP_MAX_PAYLOAD);
+                        int payloadLength = (offset + RTP_MAX_PAYLOAD < buffer.Length) ? RTP_MAX_PAYLOAD : buffer.Length - offset;
+                        byte[] payload = new byte[payloadLength];
+
+                        Buffer.BlockCopy(buffer, offset, payload, 0, payloadLength);
+
+                        // RFC3551 specifies that for audio the marker bit should always be 0 except for when returning
+                        // from silence suppression. For video the marker bit DOES get set to 1 for the last packet
+                        // in a frame.
+                        int markerBit = 1;
+
+                        var audioRtpChannel = GetRtpChannel(SDPMediaTypesEnum.audio);
+                        SendRtpPacket(audioRtpChannel, AudioDestinationEndPoint, payload, audioTrack.Timestamp, markerBit, payloadTypeID, audioTrack.Ssrc, audioTrack.SeqNum++, AudioRtcpSession);
+
+                        //logger.LogDebug($"send audio { audioRtpChannel.RTPLocalEndPoint}->{AudioDestinationEndPoint}.");
+                    }
+
+                    audioTrack.Timestamp += duration;
+                }
+            }
+            catch (SocketException sockExcp)
+            {
+                logger.LogError("SocketException SendAudioFrame. " + sockExcp.Message);
+            }
+        }
+
 
         /// <summary>
         /// Sends a VP8 frame as one or more RTP packets.
